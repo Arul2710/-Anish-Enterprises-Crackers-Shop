@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, fileURLToPath } from 'node:path';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
