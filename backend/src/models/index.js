@@ -6,3 +6,4 @@ export { Cart } from './Cart.js';
 export { Order, hashAccessToken } from './Order.js';
 export { Settings } from './Settings.js';
 export { ImportLog } from './ImportLog.js';
+export { AdminSession } from './AdminSession.js';

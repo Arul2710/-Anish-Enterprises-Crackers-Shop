@@ -54,12 +54,16 @@ const readToken = (req) => {
  * routes stay public. A cookie that has been tampered with, has expired, or whose
  * session was revoked is simply ignored here and the route guard sends it to login.
  */
-export const attachAdmin = (req, _res, next) => {
-  const resolved = resolveSession(readToken(req));
-  if (!resolved) return next();
-  req.admin = resolved.admin;
-  req.adminSession = resolved.session;
-  return next();
+export const attachAdmin = async (req, _res, next) => {
+  try {
+    const resolved = await resolveSession(readToken(req));
+    if (!resolved) return next();
+    req.admin = resolved.admin;
+    req.adminSession = resolved.session;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
 };
 
 export const requireAuth = (req, _res, next) => {

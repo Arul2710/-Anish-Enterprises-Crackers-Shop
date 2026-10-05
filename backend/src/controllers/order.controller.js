@@ -25,7 +25,7 @@ export const ORDER_ACCESS_COOKIE = 'ae_order_access';
  * The order access token is stored in an httpOnly cookie scoped to /api/orders
  * so a customer can only read their own order, and the plaintext is never kept
  * server side.
- */
+ */ 
 const setAccessCookie = (res, reference, accessToken) => {
   res.cookie(`${ORDER_ACCESS_COOKIE}_${reference}`, accessToken, {
     httpOnly: true,

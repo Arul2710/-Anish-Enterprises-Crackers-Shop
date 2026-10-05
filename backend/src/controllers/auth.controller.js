@@ -50,7 +50,7 @@ export const login = asyncHandler(async (req, res) => {
   }
 
   clearFailedAttempts(key);
-  const { tokens, sessionId } = startSession({ ip: req.ip, userAgent: req.get('user-agent') });
+  const { tokens, sessionId } = await startSession({ ip: req.ip, userAgent: req.get('user-agent') });
   setAuthCookies(res, tokens);
 
   logger.info('admin signed in', { sessionId, ip: req.ip });
@@ -63,7 +63,7 @@ export const login = asyncHandler(async (req, res) => {
 
 export const refresh = asyncHandler(async (req, res) => {
   const presented = req.body?.refreshToken || readRefreshToken(req);
-  const result = refreshSession(presented);
+  const result = await refreshSession(presented);
   if (!result) {
     throw ApiError.unauthorized('Your session has expired. Sign in again.', { code: 'session_revoked' });
   }
@@ -77,7 +77,7 @@ export const refresh = asyncHandler(async (req, res) => {
 
 export const logout = asyncHandler(async (req, res) => {
   const sid = req.adminSession?.id || sessionIdOf(readAccessToken(req)) || sessionIdOf(readRefreshToken(req));
-  endSession(sid);
+  await endSession(sid);
   clearAuthCookies(res);
   return sendSuccess(res, { signedOut: true });
 });
@@ -95,7 +95,7 @@ export const updatePassword = asyncHandler(async (_req, res) => {
 });
 
 export const signOutEverywhere = asyncHandler(async (_req, res) => {
-  revokeAllSessions();
+  await revokeAllSessions();
   clearAuthCookies(res);
   return sendSuccess(res, { revoked: true });
 });

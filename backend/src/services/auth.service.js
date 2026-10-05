@@ -11,13 +11,17 @@
  *     the session instead of only asking the browser to drop its cookie,
  *   - counting repeated failures, so guessing the password is throttled.
  *
- * Sessions live in this process only. A restart signs everyone out, which is the
- * safe direction to fail in and keeps the sign-in path working with no database.
+ * Sessions are persisted in MongoDB (AdminSession collection), so a restart or
+ * redeploy of the API does not sign anyone out. The in-memory map survives only
+ * as a fallback for environments with no database connection (the unit tests),
+ * never as the production source of truth.
  */
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import { env } from '../config/env.js';
 import { adminPrincipal, publicAdminView, verifyAdminCredentials } from '../config/adminCredentials.js';
+import { AdminSession } from '../models/AdminSession.js';
 
 const ISSUER = 'anish-enterprises';
 
@@ -25,9 +29,11 @@ const ISSUER = 'anish-enterprises';
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_WINDOW_MS = 15 * 60 * 1000;
 
-/** Live sessions by token id, and failed attempts by key. Both pruned on write. */
-const sessions = new Map();
+/** Test-only fallback store used when mongoose has no live connection. */
+const memorySessions = new Map();
 const failures = new Map();
+
+const usingDatabase = () => mongoose.connection?.readyState === 1;
 
 /** Milliseconds for a jsonwebtoken duration string, used to set cookie maxAge. */
 export const durationToMs = (value) => {
@@ -52,9 +58,54 @@ const verify = (token, expectedType) => {
   }
 };
 
-const dropExpired = (now = Date.now()) => {
-  for (const [id, session] of sessions) if (session.expiresAt <= now) sessions.delete(id);
+/**
+ * The token must belong to the configured admin and carry a usable session id.
+ * Anything else is refused even with a valid signature.
+ */
+const claimsAreForAdmin = (payload) => {
+  if (!payload || typeof payload !== 'object') return false;
+  if (!payload.sid || typeof payload.sid !== 'string') return false;
+  const admin = adminPrincipal();
+  return payload.sub === admin.id && payload.role === admin.role;
+};
+
+const toSessionView = (doc) => ({
+  id: doc.sid,
+  subject: doc.subject,
+  role: doc.role,
+  issuedAt: doc.issuedAt instanceof Date ? doc.issuedAt.toISOString() : doc.issuedAt,
+  lastLoginAt: doc.lastLoginAt instanceof Date ? doc.lastLoginAt.toISOString() : doc.lastLoginAt,
+  ip: doc.ip ?? null,
+  userAgent: doc.userAgent ?? null,
+  expiresAt: doc.expiresAt instanceof Date ? doc.expiresAt.getTime() : Number(new Date(doc.expiresAt)),
+  revokedAt: doc.revokedAt ? (doc.revokedAt instanceof Date ? doc.revokedAt.toISOString() : doc.revokedAt) : null,
+});
+
+const memoryDropExpired = (now = Date.now()) => {
+  for (const [id, session] of memorySessions) if (session.expiresAt <= now || session.revokedAt) memorySessions.delete(id);
   for (const [key, record] of failures) if (record.lockedUntil <= now && record.count === 0) failures.delete(key);
+};
+
+const memoryFindLive = (sid) => {
+  const session = memorySessions.get(sid);
+  if (!session || session.expiresAt <= Date.now() || session.revokedAt) return null;
+  return session;
+};
+
+const findLiveSession = async (sid) => {
+  if (!usingDatabase()) return memoryFindLive(sid);
+  const doc = await AdminSession.findOne({ sid }).lean();
+  if (!doc || doc.revokedAt || new Date(doc.expiresAt).getTime() <= Date.now()) return null;
+  return toSessionView(doc);
+};
+
+const pruneExpiredSessions = async () => {
+  if (!usingDatabase()) return memoryDropExpired();
+  try {
+    await AdminSession.deleteMany({ expiresAt: { $lte: new Date() } });
+  } catch {
+    // Pruning is best-effort; a failed sweep never blocks sign-in.
+  }
 };
 
 /**
@@ -67,21 +118,39 @@ export const assertCredentials = (email, password) => {
 };
 
 /** Starts a session and returns the token pair to write into the cookies. */
-export const startSession = ({ ip = null, userAgent = null } = {}) => {
+export const startSession = async ({ ip = null, userAgent = null } = {}) => {
   const admin = adminPrincipal();
-  dropExpired();
+  await pruneExpiredSessions();
   const sessionId = crypto.randomUUID();
   const accessTokenMaxAge = durationToMs(env.JWT_EXPIRES_IN);
   const refreshTokenMaxAge = durationToMs(env.JWT_REFRESH_EXPIRES_IN);
-  sessions.set(sessionId, {
-    id: sessionId,
-    subject: admin.id,
-    issuedAt: new Date().toISOString(),
-    lastLoginAt: new Date().toISOString(),
-    ip,
-    userAgent,
-    expiresAt: Date.now() + (refreshTokenMaxAge ?? 0),
-  });
+  const expiresAtMs = Date.now() + (refreshTokenMaxAge ?? 0);
+
+  if (usingDatabase()) {
+    await AdminSession.create({
+      sid: sessionId,
+      subject: admin.id,
+      role: admin.role,
+      issuedAt: new Date(),
+      lastLoginAt: new Date(),
+      expiresAt: new Date(expiresAtMs),
+      ip,
+      userAgent,
+      revokedAt: null,
+    });
+  } else {
+    memorySessions.set(sessionId, {
+      id: sessionId,
+      subject: admin.id,
+      role: admin.role,
+      issuedAt: new Date().toISOString(),
+      lastLoginAt: new Date().toISOString(),
+      ip,
+      userAgent,
+      expiresAt: expiresAtMs,
+      revokedAt: null,
+    });
+  }
 
   const claims = { sub: admin.id, role: admin.role, email: admin.email, name: admin.name, sid: sessionId };
   return {
@@ -102,13 +171,12 @@ export const startSession = ({ ip = null, userAgent = null } = {}) => {
  * is still refused once its session has been revoked, so a copied cookie stops
  * working the moment the owner logs out.
  */
-export const resolveSession = (token) => {
+export const resolveSession = async (token) => {
   if (!token) return null;
   const payload = verify(token, 'access');
-  if (!payload) return null;
-  dropExpired();
-  const session = sessions.get(payload.sid);
-  if (!session || session.expiresAt <= Date.now()) return null;
+  if (!claimsAreForAdmin(payload)) return null;
+  const session = await findLiveSession(payload.sid);
+  if (!session) return null;
   return { session, admin: adminPrincipal() };
 };
 
@@ -116,13 +184,12 @@ export const resolveSession = (token) => {
  * Exchanges a valid refresh cookie for a fresh pair, but only while the session
  * behind it is still live.
  */
-export const refreshSession = (token) => {
+export const refreshSession = async (token) => {
   if (!token) return null;
   const payload = verify(token, 'refresh');
-  if (!payload) return null;
-  dropExpired();
-  const session = sessions.get(payload.sid);
-  if (!session || session.expiresAt <= Date.now()) return null;
+  if (!claimsAreForAdmin(payload)) return null;
+  const session = await findLiveSession(payload.sid);
+  if (!session) return null;
   const admin = adminPrincipal();
   const claims = { sub: admin.id, role: admin.role, email: admin.email, name: admin.name, sid: session.id };
   return {
@@ -141,14 +208,30 @@ export const refreshSession = (token) => {
 export const sessionIdOf = (token) => verify(token, 'access')?.sid || verify(token, 'refresh')?.sid || null;
 
 /** Revokes one session, or every session when no id is given. */
-export const endSession = (sessionId) => {
-  if (sessionId) sessions.delete(sessionId);
-  else sessions.clear();
+export const endSession = async (sessionId) => {
+  if (usingDatabase()) {
+    if (sessionId) {
+      await AdminSession.updateOne({ sid: sessionId }, { $set: { revokedAt: new Date() } });
+    } else {
+      await AdminSession.updateMany({ revokedAt: null }, { $set: { revokedAt: new Date() } });
+    }
+    return;
+  }
+  if (sessionId) {
+    const session = memorySessions.get(sessionId);
+    if (session) session.revokedAt = Date.now();
+  } else {
+    memorySessions.clear();
+  }
 };
 
-export const revokeAllSessions = () => {
-  const count = sessions.size;
-  sessions.clear();
+export const revokeAllSessions = async () => {
+  if (usingDatabase()) {
+    const result = await AdminSession.updateMany({ revokedAt: null, expiresAt: { $gt: new Date() } }, { $set: { revokedAt: new Date() } });
+    return result.modifiedCount ?? 0;
+  }
+  const count = memorySessions.size;
+  memorySessions.clear();
   return count;
 };
 

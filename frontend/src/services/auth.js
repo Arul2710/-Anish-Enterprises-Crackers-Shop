@@ -14,7 +14,7 @@ import { readStorage, writeStorage, clearStorage } from '../utils/storage';
 
 // Optional chaining keeps this usable outside a Vite build, where import.meta.env
 // is not defined, so the service can be exercised directly by the smoke tests.
-const API_BASE = 'https://anish-enterprises-crackers-shop-1.onrender.com/api';
+import { API_BASE } from './config';
 
 export const adminSessionStorageKey = 'spark-shine-admin-session';
 
@@ -87,7 +87,7 @@ const announceSession = () => {
  * Every call carries `credentials: 'include'` so the browser attaches the HttpOnly
  * session cookie. The cookie itself is unreadable from script by design.
  */
-const request = async (path, { method = 'GET', body } = {}) => {
+const rawRequest = async (path, { method = 'GET', body } = {}) => {
   const response = await fetch(`${API_BASE}${path}`, {
     method,
     // Required for the session cookie to travel with the request.
@@ -102,6 +102,20 @@ const request = async (path, { method = 'GET', body } = {}) => {
     payload = null;
   }
   return { ok: response.ok, status: response.status, data: payload?.data ?? null, error: payload?.error ?? null };
+};
+
+/**
+ * One safe refresh attempt on a 401: the access cookie may simply have expired
+ * while the refresh cookie is still good. The original request is retried only
+ * when the refresh succeeds, and never for the auth endpoints themselves, so a
+ * genuine sign-out or bad credential cannot loop.
+ */
+const request = async (path, { method = 'GET', body } = {}) => {
+  const result = await rawRequest(path, { method, body });
+  if (result.status !== 401 || /^\/auth\/(login|refresh)$/.test(path)) return result;
+  const refreshed = await rawRequest('/auth/refresh', { method: 'POST' }).catch(() => null);
+  if (!refreshed || !refreshed.ok) return result;
+  return rawRequest(path, { method, body });
 };
 
 /** Hides the API payload shape from the rest of the UI. */

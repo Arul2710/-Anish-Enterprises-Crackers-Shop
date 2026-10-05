@@ -73,12 +73,12 @@ test('the view sent to the browser carries no credential material', () => {
   }
 });
 
-test('a session resolves to the owner and can be revoked', () => {
-  const { tokens, sessionId, admin } = startSession({ ip: '127.0.0.1' });
+test('a session resolves to the owner and can be revoked', async () => {
+  const { tokens, sessionId, admin } = await startSession({ ip: '127.0.0.1' });
   assert.ok(tokens.accessToken && tokens.refreshToken);
   assert.ok(tokens.accessTokenMaxAge > 0 && tokens.refreshTokenMaxAge > tokens.accessTokenMaxAge);
 
-  const resolved = resolveSession(tokens.accessToken);
+  const resolved = await resolveSession(tokens.accessToken);
   assert.ok(resolved, 'the access token resolves while the session is live');
   assert.equal(resolved.admin.id, ADMIN_ID);
   assert.equal(resolved.session.id, sessionId);
@@ -86,55 +86,55 @@ test('a session resolves to the owner and can be revoked', () => {
   assert.equal(admin.id, ADMIN_ID);
 
   // The refresh cookie is what survives a reload, so it must resolve too.
-  const refreshed = refreshSession(tokens.refreshToken);
+  const refreshed = await refreshSession(tokens.refreshToken);
   assert.ok(refreshed, 'a live session can be refreshed');
   assert.ok(refreshed.tokens.accessToken);
 });
 
-test('a token with no session, or a forged one, resolves to nothing', () => {
-  assert.equal(resolveSession(null), null);
-  assert.equal(resolveSession('not-a-token'), null);
-  assert.equal(resolveSession('a.b.c'), null);
+test('a token with no session, or a forged one, resolves to nothing', async () => {
+  assert.equal(await resolveSession(null), null);
+  assert.equal(await resolveSession('not-a-token'), null);
+  assert.equal(await resolveSession('a.b.c'), null);
   // A correctly signed token whose session was never registered must not pass.
-  const { tokens } = startSession();
-  endSession(sessionIdOf(tokens.accessToken));
-  assert.equal(resolveSession(tokens.accessToken), null, 'a revoked session is refused');
-  assert.equal(refreshSession(tokens.refreshToken), null, 'and so is a refresh for it');
+  const { tokens } = await startSession();
+  await endSession(sessionIdOf(tokens.accessToken));
+  assert.equal(await resolveSession(tokens.accessToken), null, 'a revoked session is refused');
+  assert.equal(await refreshSession(tokens.refreshToken), null, 'and so is a refresh for it');
 });
 
-test('logging out invalidates the session, so a copied cookie stops working', () => {
-  const { tokens } = startSession();
+test('logging out invalidates the session, so a copied cookie stops working', async () => {
+  const { tokens } = await startSession();
   const stolen = tokens.accessToken;
-  assert.ok(resolveSession(stolen), 'the session works before the logout');
+  assert.ok(await resolveSession(stolen), 'the session works before the logout');
 
-  endSession(sessionIdOf(stolen));
+  await endSession(sessionIdOf(stolen));
 
-  assert.equal(resolveSession(stolen), null, 'the token is refused after the logout');
-  assert.equal(refreshSession(tokens.refreshToken), null);
+  assert.equal(await resolveSession(stolen), null, 'the token is refused after the logout');
+  assert.equal(await refreshSession(tokens.refreshToken), null);
   // Replaying the same cookie after a fresh sign-in must not resurrect it.
-  const next = startSession();
-  assert.ok(resolveSession(next.tokens.accessToken));
-  assert.equal(resolveSession(stolen), null);
+  const next = await startSession();
+  assert.ok(await resolveSession(next.tokens.accessToken));
+  assert.equal(await resolveSession(stolen), null);
 });
 
-test('an access token cannot be used where a refresh token is expected', () => {
-  const { tokens } = startSession();
-  assert.equal(refreshSession(tokens.accessToken), null, 'token types are not interchangeable');
-  assert.equal(refreshSession(null), null);
+test('an access token cannot be used where a refresh token is expected', async () => {
+  const { tokens } = await startSession();
+  assert.equal(await refreshSession(tokens.accessToken), null, 'token types are not interchangeable');
+  assert.equal(await refreshSession(null), null);
   assert.equal(sessionIdOf('garbage'), null);
 });
 
-test('signing out everywhere clears every live session', () => {
-  startSession();
-  const second = startSession();
-  assert.ok(resolveSession(second.tokens.accessToken));
-  assert.ok(revokeAllSessions() >= 1);
-  assert.equal(resolveSession(second.tokens.accessToken), null);
-  assert.equal(refreshSession(second.tokens.refreshToken), null);
+test('signing out everywhere clears every live session', async () => {
+  await startSession();
+  const second = await startSession();
+  assert.ok(await resolveSession(second.tokens.accessToken));
+  assert.ok(await revokeAllSessions() >= 1);
+  assert.equal(await resolveSession(second.tokens.accessToken), null);
+  assert.equal(await refreshSession(second.tokens.refreshToken), null);
 });
 
-test('the admin view is the owner with the session sign-in time', () => {
-  const { sessionId } = startSession();
+test('the admin view is the owner with the session sign-in time', async () => {
+  const { sessionId } = await startSession();
   const view = adminView({ lastLoginAt: '2026-09-30T10:00:00.000Z' });
   assert.equal(view.role, 'owner');
   assert.equal(view.email, ADMIN_EMAIL);
