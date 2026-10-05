@@ -14,7 +14,7 @@ import { readStorage, writeStorage, clearStorage } from '../utils/storage';
 
 // Optional chaining keeps this usable outside a Vite build, where import.meta.env
 // is not defined, so the service can be exercised directly by the smoke tests.
-const API_BASE = import.meta.env?.VITE_API_URL || '/api';
+const API_BASE = 'https://anish-enterprises-crackers-shop-1.onrender.com/api';
 
 export const adminSessionStorageKey = 'spark-shine-admin-session';
 
