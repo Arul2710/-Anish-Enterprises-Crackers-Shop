@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -43,7 +44,7 @@ const comboKeyFor = (base) => {
 };
 
 const imagesDir = fileURLToPath(new URL('../public/images/', import.meta.url));
-const bgDir = new URL('../public/bg/', import.meta.url).pathname.replace(/^\//, '');
+const bgDir = fileURLToPath(new URL('../public/bg/', import.meta.url));
 
 function scanFolder(folder, keyFor = (base) => base) {
   const dir = join(imagesDir, folder);
