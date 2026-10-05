@@ -42,7 +42,7 @@ const comboKeyFor = (base) => {
   return card ? card.id : null;
 };
 
-const imagesDir = new URL('../public/images/', import.meta.url).pathname.replace(/^\//, '');
+const imagesDir = fileURLToPath(new URL('../public/images/', import.meta.url));
 const bgDir = new URL('../public/bg/', import.meta.url).pathname.replace(/^\//, '');
 
 function scanFolder(folder, keyFor = (base) => base) {
